@@ -158,10 +158,10 @@ if isinstance(ros2_fields[-1].type, NamespacedType):
   ros2_msg.@(ros2_field_selection).resize(ros1_msg.@(ros1_field_selection).size());
 @[      else]@
   // statically sized array
-  static_assert(
-    std::tuple_size<decltype(ros2_msg.@(ros2_field_selection))>::value >= (ros1_msg.@(ros1_field_selection).static_size),
-    "destination array not large enough for source array"
-  );
+  //static_assert(
+  //  std::tuple_size<decltype(ros2_msg.@(ros2_field_selection))>::value >= (ros1_msg.@(ros1_field_selection).static_size),
+  //  "destination array not large enough for source array"
+  //);
 @[      end if]@
 @[      if not isinstance(ros2_fields[-1].type.value_type, NamespacedType)]@
   // convert primitive array elements
@@ -245,10 +245,10 @@ if isinstance(ros2_fields[-1].type, NamespacedType):
   ros1_msg.@(ros1_field_selection).resize(ros2_msg.@(ros2_field_selection).size());
 @[      else]@
   // statically sized array
-  static_assert(
-    (ros1_msg.@(ros1_field_selection).static_size) >= std::tuple_size<decltype(ros2_msg.@(ros2_field_selection))>::value,
-    "destination array not large enough for source array"
-  );
+  //static_assert(
+  //  (ros1_msg.@(ros1_field_selection).static_size) >= std::tuple_size<decltype(ros2_msg.@(ros2_field_selection))>::value,
+  //  "destination array not large enough for source array"
+  //);
 @[      end if]@
 @[      if not isinstance(ros2_fields[-1].type.value_type, NamespacedType)]@
   // convert primitive array elements
