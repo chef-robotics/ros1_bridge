@@ -745,11 +745,12 @@ def determine_field_mapping(ros1_msg, ros2_msg, mapping_rules, msg_idx):
     """
     ros1_spec = load_ros1_message(ros1_msg)
     if not ros1_spec:
+        print(f"unable to load {ros1_msg=}")
         return None
     ros2_spec = load_ros2_message(ros2_msg)
     if not ros2_spec:
+        print(f"unable to load {ros2_msg=}")
         return None
-
     mapping = Mapping(ros1_msg, ros2_msg)
 
     # check for manual field mapping rules first
@@ -819,6 +820,7 @@ def determine_field_mapping(ros1_msg, ros2_msg, mapping_rules, msg_idx):
                     break
             else:
                 # if fields from both sides are not mappable the whole message is not mappable
+                print(f"{ros2_msg}: Unable to map {ros2_member.name=}")
                 return None
 
     return mapping
