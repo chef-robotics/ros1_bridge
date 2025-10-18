@@ -145,9 +145,9 @@ private:
 
       std::shared_future<ROS2ClientGoalHandle> gh2_future;
       auto send_goal_ops = ROS2SendGoalOptions();
-      send_goal_ops.goal_response_callback =
-        [this, &gh2_future](std::shared_future<ROS2GoalHandle> gh2) mutable {
-          auto goal_handle = gh2_future.get();
+
+      
+      send_goal_ops.goal_response_callback = ([this](ROS2GoalHandle goal_handle) mutable {
           if (!goal_handle) {
             gh1_.setRejected();          // goal was not accepted by remote server
             return;
@@ -163,7 +163,7 @@ private:
               auto fut = client_->async_cancel_goal(gh2_);
             }
           }
-        };
+        });
 
       send_goal_ops.feedback_callback = [this](ROS2GoalHandle, auto feedback2) mutable {
           ROS1Feedback feedback1;

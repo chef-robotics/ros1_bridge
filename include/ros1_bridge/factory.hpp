@@ -45,7 +45,7 @@ public:
   {
     ts_lib_ = rclcpp::get_typesupport_library(ros2_type_name, "rosidl_typesupport_cpp");
     if (static_cast<bool>(ts_lib_)) {
-      type_support_ = rclcpp::get_typesupport_handle(
+      type_support_ = rclcpp::get_message_typesupport_handle(
         ros2_type_name, "rosidl_typesupport_cpp",
         *ts_lib_);
     }
@@ -56,7 +56,7 @@ public:
     ros::NodeHandle node,
     const std::string & topic_name,
     size_t queue_size,
-    bool latch = false)
+    bool latch = false) override
   {
     return node.advertise<ROS1_T>(topic_name, queue_size, latch);
   }
@@ -65,7 +65,7 @@ public:
   create_ros2_publisher(
     rclcpp::Node::SharedPtr node,
     const std::string & topic_name,
-    size_t queue_size)
+    size_t queue_size) override
   {
     return node->create_publisher<ROS2_T>(topic_name, rclcpp::QoS(rclcpp::KeepLast(queue_size)));
   }
@@ -74,7 +74,7 @@ public:
   create_ros2_publisher(
     rclcpp::Node::SharedPtr node,
     const std::string & topic_name,
-    const rmw_qos_profile_t & qos_profile)
+    const rmw_qos_profile_t & qos_profile) override
   {
     auto qos = rclcpp::QoS(rclcpp::KeepAll());
     qos.get_rmw_qos_profile() = qos_profile;
@@ -85,7 +85,7 @@ public:
   create_ros2_publisher(
     rclcpp::Node::SharedPtr node,
     const std::string & topic_name,
-    const rclcpp::QoS & qos)
+    const rclcpp::QoS & qos) override
   {
     return node->create_publisher<ROS2_T>(topic_name, qos);
   }
@@ -96,7 +96,7 @@ public:
     const std::string & topic_name,
     size_t queue_size,
     rclcpp::PublisherBase::SharedPtr ros2_pub,
-    rclcpp::Logger logger)
+    rclcpp::Logger logger) override
   {
     // workaround for https://github.com/ros/roscpp_core/issues/22 to get the connection header
     ros::SubscribeOptions ops;
@@ -118,7 +118,7 @@ public:
     const std::string & topic_name,
     size_t queue_size,
     ros::Publisher ros1_pub,
-    rclcpp::PublisherBase::SharedPtr ros2_pub = nullptr)
+    rclcpp::PublisherBase::SharedPtr ros2_pub = nullptr) override
   {
     auto qos = rclcpp::SensorDataQoS(rclcpp::KeepLast(queue_size));
     return create_ros2_subscriber(node, topic_name, qos, ros1_pub, ros2_pub);
@@ -130,7 +130,7 @@ public:
     const std::string & topic_name,
     const rmw_qos_profile_t & qos,
     ros::Publisher ros1_pub,
-    rclcpp::PublisherBase::SharedPtr ros2_pub = nullptr)
+    rclcpp::PublisherBase::SharedPtr ros2_pub = nullptr) override
   {
     auto rclcpp_qos = rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(qos));
     rclcpp_qos.get_rmw_qos_profile() = qos;
@@ -144,7 +144,7 @@ public:
     const std::string & topic_name,
     const rclcpp::QoS & qos,
     ros::Publisher ros1_pub,
-    rclcpp::PublisherBase::SharedPtr ros2_pub = nullptr)
+    rclcpp::PublisherBase::SharedPtr ros2_pub = nullptr) override
   {
     std::function<
       void(const typename ROS2_T::SharedPtr msg, const rclcpp::MessageInfo & msg_info)> callback;

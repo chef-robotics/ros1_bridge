@@ -46,6 +46,8 @@ struct ServiceBridge2to1
 class FactoryInterface
 {
 public:
+  virtual ~FactoryInterface() = default;
+
   virtual
   ros::Publisher
   create_ros1_publisher(
@@ -137,6 +139,8 @@ public:
 class ServiceFactoryInterface
 {
 public:
+  virtual ~ServiceFactoryInterface() = default;
+
   virtual ServiceBridge1to2 service_bridge_1_to_2(
     ros::NodeHandle &, rclcpp::Node::SharedPtr, const std::string &, int) = 0;
 
@@ -147,6 +151,8 @@ public:
 class ActionFactoryInterface
 {
 public:
+  virtual ~ActionFactoryInterface() = default;
+
   virtual void create_server_client(
     ros::NodeHandle ros1_node,
     rclcpp::Node::SharedPtr ros2_node,
