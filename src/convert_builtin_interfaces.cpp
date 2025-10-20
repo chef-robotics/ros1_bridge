@@ -16,9 +16,28 @@
 
 #include "ros/serialization.h"
 
+#include <rclcpp/duration.hpp>
+
 namespace ros1_bridge
 {
+template<>
+void
+convert_1_to_2(
+  const float64& ros1_msg,
+  builtin_interfaces::msg::Duration & ros2_msg)
+{
+  ros2_msg = rclcpp::Duration::from_seconds(ros1_msg);
+}
 
+template<>
+void
+convert_2_to_1(
+  const builtin_interfaces::msg::Duration & ros2_msg,
+  float64& ros1_msg)
+{
+  ros1_msg = rclcpp::Duration(ros2_msg).seconds();
+}
+  
 template<>
 void
 convert_1_to_2(

@@ -10,6 +10,14 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra)
 endif()
 
+
+set(ACTION_GOAL_RESPONSE_CB_CONST_list "humble;iron")
+if("$ENV{ROS_DISTRO}" IN_LIST ACTION_GOAL_RESPONSE_CB_CONST_list)
+    #set(ACTION_GOAL_RESPONSE_CB_CONST ON)
+    add_definitions("-DACTION_GOAL_RESPONSE_CB_CONST")
+    message("Using ACTION_GOAL_RESPONSE_CB_CONST")
+endif()
+
 find_package(rmw REQUIRED)
 
 find_package(ament_cmake REQUIRED)
@@ -17,6 +25,8 @@ find_package(rclcpp REQUIRED)
 find_package(rmw_implementation_cmake REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
+
+find_package(backward_ros REQUIRED)
 
 # find ROS 1 packages
 set(cmake_extras_files cmake/find_ros1_package.cmake cmake/find_ros1_interface_packages.cmake)

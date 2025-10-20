@@ -333,7 +333,7 @@ def get_ros2_messages():
                     file=sys.stderr)
                 continue
             for data in content:
-                if all(n not in data for n in ('ros1_service_name', 'ros2_service_name')):
+                if all(n not in data for n in ('ros1_service_name', 'ros2_service_name', 'ros1_action_name', 'ros2_action_name')):
                     try:
                         rules.append(MessageMappingRule(data, package_name))
                     except Exception as e:  # noqa: B902
@@ -396,7 +396,7 @@ def get_ros2_services():
                     file=sys.stderr)
                 continue
             for data in content:
-                if all(n not in data for n in ('ros1_message_name', 'ros2_message_name')):
+                if all(n not in data for n in ('ros1_message_name', 'ros2_message_name', 'ros1_action_name', 'ros2_action_name')):
                     try:
                         rules.append(ServiceMappingRule(data, package_name))
                     except Exception as e:  # noqa: B902
@@ -432,12 +432,21 @@ def get_ros2_actions():
     pkgs = []
     actions = []
     rules = []
-    resource_type = 'rosidl_interfaces'
-    resources = ament_index_python.get_resources(resource_type)
-    for package_name, prefix_path in resources.items():
-        pkgs.append(package_name)
-        resource, _ = ament_index_python.get_resource(
-            resource_type, package_name)
+
+    resources = {
+        key: (val, 'rosidl_interfaces') for key, val
+        in ament_index_python.get_resources('rosidl_interfaces').items()
+    }
+    resources.update({
+        key: (val, 'ros1_bridge_foreign_mapping') for key, val
+        in ament_index_python.get_resources('ros1_bridge_foreign_mapping').items()
+    })
+
+    for package_name, val_tuple in resources.items():
+        prefix_path, resource_type = val_tuple
+        if resource_type == 'rosidl_interfaces':  # Required, otherwise linking fails
+            pkgs.append(package_name)
+        resource, _ = ament_index_python.get_resource(resource_type, package_name)
         interfaces = resource.splitlines()
         action_names = {
             i[7:-7]
@@ -472,11 +481,11 @@ def get_ros2_actions():
 
 
 class Message:
-    __slots__ = [
-        'package_name',
-        'message_name',
-        'prefix_path'
-    ]
+    # __slots__ = [
+    #     'package_name',
+    #     'message_name',
+    #     'prefix_path',
+    # ]
 
     def __init__(self, package_name, message_name, prefix_path=None):
         self.package_name = package_name
@@ -541,10 +550,12 @@ class MessageMappingRule(MappingRule):
         'ros1_message_name',
         'ros2_message_name',
         'fields_1_to_2',
+        'allow_missing'
     ]
 
     def __init__(self, data, expected_package_name):
         super().__init__(data, expected_package_name)
+        self.allow_missing = data.get('allow_missing', False)
         self.ros1_message_name = None
         self.ros2_message_name = None
         self.fields_1_to_2 = None
@@ -582,10 +593,12 @@ class ServiceMappingRule(MappingRule):
         'ros2_service_name',
         'request_fields_1_to_2',
         'response_fields_1_to_2',
+        'allow_missing',
     ]
 
     def __init__(self, data, expected_package_name):
         super().__init__(data, expected_package_name)
+        self.allow_missing = data.get('allow_missing', False)
         self.ros1_service_name = None
         self.ros2_service_name = None
         self.request_fields_1_to_2 = None
@@ -650,7 +663,7 @@ class ActionMappingRule(MappingRule):
                 for ros1_field_name, ros2_field_name in data['feedback_fields_1_to_2'].items():
                     self.feedback_fields_1_to_2[ros1_field_name] = ros2_field_name
                 expected_keys += 1
-            elif len(data) > expected_keys:
+            elif len(data) > expected_keys + int('enable_foreign_mappings' in data):
                 raise RuntimeError(
                     'Mapping for package %s contains unknown field(s)' % self.ros2_package_name)
         elif len(data) > 2:
@@ -745,11 +758,8 @@ def determine_common_services(
 
     pairs = []
     services = []
-    for ros1_srv in ros1_srvs:
-        for ros2_srv in ros2_srvs:
-            if ros1_srv.package_name == ros2_srv.package_name:
-                if ros1_srv.message_name == ros2_srv.message_name:
-                    pairs.append((ros1_srv, ros2_srv))
+
+    rules_by_pair = {}
 
     for rule in mapping_rules:
         for ros1_srv in ros1_srvs:
@@ -762,13 +772,22 @@ def determine_common_services(
                     if rule.ros1_service_name is None and rule.ros2_service_name is None:
                         if ros1_srv.message_name == ros2_srv.message_name:
                             pairs.append(pair)
+                            rules_by_pair[pair] = rule
                     else:
                         if (
                             rule.ros1_service_name == ros1_srv.message_name and
                             rule.ros2_service_name == ros2_srv.message_name
                         ):
                             pairs.append(pair)
-
+                            rules_by_pair[pair] = rule
+    for ros1_srv in ros1_srvs:
+        for ros2_srv in ros2_srvs:
+            if ros1_srv.package_name == ros2_srv.package_name:
+                if ros1_srv.message_name == ros2_srv.message_name:
+                    pair = (ros1_srv, ros2_srv)
+                    if pair in pairs:
+                        continue
+                    pairs.append(pair)
     for pair in pairs:
         ros1_spec = load_ros1_service(pair[0])
         ros2_spec = load_ros2_service(pair[1])
@@ -786,7 +805,10 @@ def determine_common_services(
         }
         match = True
         for direction in ['request', 'response']:
-            if len(ros1_fields[direction]) != len(ros2_fields[direction]):
+            allow_missing = False
+            if pair in rules_by_pair:
+                allow_missing = rules_by_pair[pair].allow_missing
+            if not allow_missing and len(ros1_fields[direction]) != len(ros2_fields[direction]):
                 match = False
                 break
             for i, ros1_field in enumerate(ros1_fields[direction]):
@@ -805,9 +827,12 @@ def determine_common_services(
                         if ((ros1_type, ros2_type) not in message_string_pairs and
                                 not ros2_type.startswith('builtin_interfaces')):
                             match = False
-                            break
+                            if allow_missing:
+                                continue
+                            else:
+                                break
                 output[direction].append({
-                    'basic': False if '/' in ros1_type else True,
+                    'basic': False if '/' in ros1_type or '/' in ros2_type else True,
                     'array': True if '[]' in ros1_type else False,
                     'ros1': {
                         'name': ros1_name,
@@ -832,7 +857,7 @@ def determine_common_services(
 
 
 def determine_common_actions(
-    ros1_actions, ros2_actions, mapping_rules, message_string_pairs=None
+    ros1_actions: list[Message], ros2_actions: list[Message], mapping_rules, message_string_pairs=None
 ):
     if message_string_pairs is None:
         message_string_pairs = set()
@@ -858,7 +883,9 @@ def determine_common_actions(
                             rule.ros1_action_name == ros1_action.message_name and
                             rule.ros2_action_name == ros2_action.message_name
                         ):
+                            ros2_action.force = True
                             pairs.append((ros1_action, ros2_action))
+                            pairs = list(set(pairs))
 
     for pair in pairs:
         ros1_spec = load_ros1_action(pair[0])
@@ -879,6 +906,15 @@ def determine_common_actions(
             'feedback': []
         }
         match = True
+        force = getattr(pair[1], 'force', False)
+
+        if force:
+            # The intent was to hardcode the mapping in an xml file, but I accidentally made an automatic partial mapping
+            # of [all ros1 fields] to [ros2 fields with the same name].  Maybe another flag for "best effort" mapping?
+            ros2_fields['goal'] = [a for a in ros2_spec.goal.fields for b in ros1_spec.goal.fields() if a.name == b[1]]
+            ros2_fields['result'] = [a for a in ros2_spec.result.fields for b in ros1_spec.result.fields() if a.name == b[1]]
+            ros2_fields['feedback'] = [a for a in ros2_spec.feedback.fields for b in ros1_spec.feedback.fields() if a.name == b[1]]
+
         for direction in ['goal', 'result', 'feedback']:
             if len(ros1_fields[direction]) != len(ros2_fields[direction]):
                 match = False
@@ -920,6 +956,7 @@ def determine_common_actions(
                     }
                 })
         if match:
+            print(f"appending action {pair[0].message_name}")
             actions.append({
                 'ros1_name': pair[0].message_name,
                 'ros2_name': pair[1].message_name,
@@ -995,7 +1032,7 @@ def get_ros2_selected_fields(ros2_field_selection, parent_ros2_spec, msg_idx):
     return tuple(selected_fields)
 
 
-def determine_field_mapping(ros1_msg, ros2_msg, mapping_rules, msg_idx):
+def determine_field_mapping(ros1_msg, ros2_msg, mapping_rules, msg_idx, allow_missing=False):
     """
     Return the first mapping object for ros1_msg and ros2_msg found in mapping_rules.
 
@@ -1018,19 +1055,21 @@ def determine_field_mapping(ros1_msg, ros2_msg, mapping_rules, msg_idx):
 
     # check for manual field mapping rules first
     for rule in mapping_rules:
-        if not rule.is_field_mapping():
-            continue
         if rule.ros1_package_name != ros1_msg.package_name or \
                 rule.ros1_message_name != ros1_msg.message_name:
             continue
         if rule.ros2_package_name != ros2_msg.package_name or \
                 rule.ros2_message_name != ros2_msg.message_name:
             continue
-
+        print(rule)
+        allow_missing = rule.allow_missing
+        if not rule.is_field_mapping():
+            continue
         for ros1_field_selection, ros2_field_selection in rule.fields_1_to_2.items():
+            if ros1_field_selection is None or ros2_field_selection is None:
+                continue
             try:
-                ros1_selected_fields = \
-                    get_ros1_selected_fields(
+                ros1_selected_fields = get_ros1_selected_fields(
                         ros1_field_selection, ros1_spec, msg_idx)
             except IndexError:
                 print(
@@ -1040,8 +1079,7 @@ def determine_field_mapping(ros1_msg, ros2_msg, mapping_rules, msg_idx):
                     file=sys.stderr)
                 continue
             try:
-                ros2_selected_fields = \
-                    get_ros2_selected_fields(
+                ros2_selected_fields = get_ros2_selected_fields(
                         ros2_field_selection, ros2_spec, msg_idx)
             except IndexError:
                 print(
@@ -1075,18 +1113,26 @@ def determine_field_mapping(ros1_msg, ros2_msg, mapping_rules, msg_idx):
 
     mapping.ros1_field_missing_in_ros2 = ros1_field_missing_in_ros2
 
-    if ros1_field_missing_in_ros2:
-        # if some fields exist in ROS 1 but not in ROS 2
-        # check that no fields exist in ROS 2 but not in ROS 1
-        # since then it might be the case that those have been renamed and should be mapped
-        for ros2_member in ros2_spec.structure.members:
-            for ros1_field in ros1_spec.parsed_fields():
-                if ros1_field.name.lower() == ros2_member.name:
-                    break
-            else:
-                # if fields from both sides are not mappable the whole message is not mappable
-                print(f"{ros2_msg}: Unable to map {ros2_member.name=}")
-                return None
+    try:
+        if ros1_field_missing_in_ros2:
+            # if some fields exist in ROS 1 but not in ROS 2
+            # check that no fields exist in ROS 2 but not in ROS 1
+            # since then it might be the case that those have been renamed and should be mapped
+            for ros2_member in ros2_spec.structure.members:
+                for ros1_field in ros1_spec.parsed_fields():
+                    if ros1_field.name.lower() == ros2_member.name:
+                        break
+                else:
+                    # if fields from both sides are not mappable the whole message is not mappable
+                    if not allow_missing:
+                        print(f"not mapping {ros1_msg}->{ros2_msg} due to missing fields")
+                        print("ros1:")
+                        for ros1_field in ros1_fields_not_mapped:
+                            print(f"    {ros1_field}")
+                        print(f"ros2: {ros2_member.name}")
+                        return None
+    except Exception as e:
+        print('%s' % str(e), file=sys.stderr)
 
     return mapping
 
@@ -1338,6 +1384,8 @@ class Mapping:
         self.fields_1_to_2[ros1_fields] = ros2_members
         self.fields_2_to_1[ros2_members] = ros1_fields
         for ros2_member in ros2_members:
+            if ros2_member is None:
+                continue
             # If the member is not a namespaced type, skip.
             if not isinstance(ros2_member.type, rosidl_parser.definition.NamespacedType):
                 continue

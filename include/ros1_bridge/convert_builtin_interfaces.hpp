@@ -28,6 +28,20 @@
 namespace ros1_bridge
 {
 
+using float64 = double;
+
+template<>
+void
+convert_1_to_2(
+  const float64& ros1_msg,
+  builtin_interfaces::msg::Duration & ros2_msg);
+
+template<>
+void
+convert_2_to_1(
+  const builtin_interfaces::msg::Duration & ros2_msg,
+  float64& ros1_msg);
+
 template<>
 void
 convert_1_to_2(

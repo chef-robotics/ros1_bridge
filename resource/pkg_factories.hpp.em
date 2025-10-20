@@ -28,7 +28,9 @@ from ros1_bridge import camel_case_to_lower_case_underscore
 #include <string>
 
 #include <ros1_bridge/factory.hpp>
+@[if ros2_action_types]@
 #include <ros1_bridge/action_factory.hpp>
+@[end if]@
 
 // include ROS 1 messages
 @[for ros1_msg in mapped_ros1_msgs]@

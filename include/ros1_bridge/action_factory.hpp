@@ -81,7 +81,9 @@ public:
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto goal : goals_) {
-      std::thread([handler = goal.second]() mutable {handler->cancel();}).detach();
+      if(auto handler = goal.second.lock()) {
+        std::thread([handler]() mutable {handler->cancel();}).detach();
+      }
     }
     server_.reset();
   }
@@ -92,7 +94,11 @@ public:
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = goals_.find(gh1.getGoalID().id);
     if (it != goals_.end()) {
-      std::thread([handler = it->second]() mutable {handler->cancel();}).detach();
+      if(auto handler = it->second.lock()) {
+        RCLCPP_INFO_STREAM(ros2_node_->get_logger(), "Cancelling goal " << gh1.getGoalID().id);
+
+        std::thread([handler]() mutable {handler->cancel();}).detach();
+      }
     }
   }
 
@@ -102,28 +108,37 @@ public:
 
     // create a new handler for the goal
     std::shared_ptr<GoalHandler> handler;
-    handler = std::make_shared<GoalHandler>(gh1, client_, ros2_node_->get_logger());
-    std::lock_guard<std::mutex> lock(mutex_);
-    goals_.insert(std::make_pair(goal_id, handler));
-
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      handler = std::shared_ptr<GoalHandler>(new GoalHandler(gh1, client_, ros2_node_->get_logger()),
+        std::function<void(GoalHandler*)>([this, goal_id](GoalHandler* p) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          goals_.erase(goal_id);
+          delete p;
+        })
+      );
+      goals_.insert(std::make_pair(goal_id, handler));
+    }
     RCLCPP_INFO_STREAM(ros2_node_->get_logger(), "Sending goal " << goal_id);
     std::thread(
       [handler, goal_id, this]() mutable {
+        RCLCPP_INFO_STREAM(ros2_node_->get_logger(), "Handling goal " << goal_id);
+
         // execute the goal remotely
         handler->handle();
 
-        // clean-up
-        std::lock_guard<std::mutex> lock(mutex_);
-        goals_.erase(goal_id);
+        RCLCPP_INFO_STREAM(ros2_node_->get_logger(), "Cleaning up goal " << goal_id);
       }).detach();
   }
 
 private:
-  class GoalHandler
+  class GoalHandler : public std::enable_shared_from_this<GoalHandler>
   {
-  public:
+public:
     void cancel()
     {
+      RCLCPP_INFO(this->logger_, "Cancelled goal");
+
       std::lock_guard<std::mutex> lock(mutex_gh_);
       canceled_ = true;
       if (gh2_) {        // cancel goal if possible
@@ -136,6 +151,8 @@ private:
       auto goal1 = gh1_.getGoal();
       ROS2Goal goal2;
       translate_goal_1_to_2(*gh1_.getGoal(), goal2);
+      
+      RCLCPP_INFO_STREAM(this->logger_, "converting goal " << *gh1_.getGoal());
 
       if (!client_->wait_for_action_server(std::chrono::seconds(1))) {
         RCLCPP_INFO(this->logger_, "Action server not available after waiting");
@@ -146,9 +163,13 @@ private:
       std::shared_future<ROS2ClientGoalHandle> gh2_future;
       auto send_goal_ops = ROS2SendGoalOptions();
 
+      // dumb little trick to tie destruction to a pointer
       
       send_goal_ops.goal_response_callback = ([this](ROS2GoalHandle goal_handle) mutable {
+        RCLCPP_INFO(this->logger_, "response cb");
+
           if (!goal_handle) {
+            RCLCPP_INFO(this->logger_, "goal rejected");
             gh1_.setRejected();          // goal was not accepted by remote server
             return;
           }
@@ -165,35 +186,42 @@ private:
           }
         });
 
-      send_goal_ops.feedback_callback = [this](ROS2GoalHandle, auto feedback2) mutable {
+      send_goal_ops.feedback_callback = [gh1 = gh1_](ROS2GoalHandle, auto feedback2) mutable {
+          // take care capturing this here - feedback is sometimes called after result
           ROS1Feedback feedback1;
           translate_feedback_2_to_1(feedback1, *feedback2);
-          gh1_.publishFeedback(feedback1);
+          gh1.publishFeedback(feedback1);
         };
+    
+      send_goal_ops.result_callback = [this, 
+        /* 
+        hold a copy of ourselves until our callback struct is destroyed 
+        this ensures that we won't get destroyed while ROS is running code
+        */
+        hold_for_destruction = this->shared_from_this()] (const typename rclcpp_action::ClientGoalHandle< ROS2_T >::WrappedResult& result2) mutable {  
+        ROS1Result res1;
+        translate_result_2_to_1(res1, *(result2.result));
+  
+        std::lock_guard<std::mutex> lock(mutex_gh_);
+        if (result2.code == rclcpp_action::ResultCode::SUCCEEDED) {
+          gh1_.setSucceeded(res1);
+        } else if (result2.code == rclcpp_action::ResultCode::CANCELED) {
+          gh1_.setCanceled(res1);
+        } else {
+          gh1_.setAborted(res1);
+        }
+      };
 
       // send goal to ROS2 server, set-up feedback
       gh2_future = client_->async_send_goal(goal2, send_goal_ops);
 
-      auto future_result = client_->async_get_result(gh2_future.get());
-      auto res2 = future_result.get();
-
-      ROS1Result res1;
-      translate_result_2_to_1(res1, *(res2.result));
-
-      std::lock_guard<std::mutex> lock(mutex_gh_);
-      if (res2.code == rclcpp_action::ResultCode::SUCCEEDED) {
-        gh1_.setSucceeded(res1);
-      } else if (res2.code == rclcpp_action::ResultCode::CANCELED) {
-        gh1_.setCanceled(res1);
-      } else {
-        gh1_.setAborted(res1);
-      }
+      gh2_ = gh2_future.get();
     }
 
     GoalHandler(ROS1GoalHandle & gh1, ROS2ClientSharedPtr & client, rclcpp::Logger logger)
     : gh1_(gh1), gh2_(nullptr), client_(client), logger_(logger), canceled_(false) {}
 
-  private:
+private:
     ROS1GoalHandle gh1_;
     ROS2ClientGoalHandle gh2_;
     ROS2ClientSharedPtr client_;
@@ -209,7 +237,7 @@ private:
   ROS2ClientSharedPtr client_;
 
   std::mutex mutex_;
-  std::map<std::string, std::shared_ptr<GoalHandler>> goals_;
+  std::map<std::string, std::weak_ptr<GoalHandler>> goals_;
 
   static void translate_goal_1_to_2(const ROS1Goal &, ROS2Goal &);
   static void translate_result_2_to_1(ROS1Result &, const ROS2Result &);
@@ -299,20 +327,16 @@ public:
 
     RCLCPP_INFO(ros2_node_->get_logger(), "Sending goal");
     std::thread(
-      [handler, goal_id, this]() mutable {
+      [handler]() mutable {
         // execute the goal remotely
         handler->handle();
-
-        // clean-up
-        std::lock_guard<std::mutex> lock(mutex_);
-        goals_.erase(goal_id);
       }).detach();
   }
 
 private:
   class GoalHandler
   {
-  public:
+public:
     void cancel()
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -382,7 +406,7 @@ private:
     GoalHandler(std::shared_ptr<ROS2ServerGoalHandle> & gh2, std::shared_ptr<ROS1Client> & client)
     : gh2_(gh2), client_(client), canceled_(false) {}
 
-  private:
+private:
     std::shared_ptr<ROS1ClientGoalHandle> gh1_;
     std::shared_ptr<ROS2ServerGoalHandle> gh2_;
     std::shared_ptr<ROS1Client> client_;
